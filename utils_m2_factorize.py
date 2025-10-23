@@ -9,103 +9,110 @@ import networkx as nx
 from csf_categorizer import categorize_csf_state
 
 
-def factorize_state(basis_state, S_w, S_v, S_n):
+def factorize_state(basis_csr_state, S_w, S_v, S_n):
     """
     Factorize a quantum state into tensor product components based on orbital sets.
 
     Input:
-        basis_state: [determinants, indices, coefficients] where
-            - determinants: list of occupation number arrays
-            - indices: list of integer indices in 2^n_orb space
-            - coefficients: array of coefficients for each determinant
+        basis_csr_state: Sparse CSR matrix representing the quantum state (scipy.sparse.csr_matrix)
+                        State is in spatial orbital basis with dimension 2^n_spatial_orbitals
         S_w: list of spatial orbital indices for W block (quantum treatment needed)
         S_v: list of spatial orbital indices for V block (affected by rotations)
         S_n: list of spatial orbital indices for N block (invariant)
 
     Return:
-        dict mapping orbital tuples to state vectors:
-        {(qubits_w...): psi_w, (qubits_v...): psi_v, (i,): psi_i, (j,): psi_j, ...}
+        dict mapping spatial orbital tuples to state vectors:
+        {(orbitals_w...): psi_w, (orbitals_v_1...): psi_v_1, (orbitals_v_2...): psi_v_2, (i,): psi_i, ...}
 
-    The keys are tuples of spin-orbital indices, values are normalized state vectors.
+    The keys are tuples of spatial orbital indices, values are normalized state vectors.
+
+    Factorization strategy:
+    - S_W: All W orbitals kept as one block
+    - S_V with 2 spatial orbitals: kept as one block (S_v_1)
+    - S_V with 4 spatial orbitals: split into two blocks of 2 spatial orbitals each (S_v_1, S_v_2)
+    - S_N: Each spatial orbital factorized separately as (i,)
     """
-    (_, k, l, a, b) = categorize_csf_state(basis_state)
+    # Convert sparse matrix to dense array
+    if basis_csr_state.shape[0] == 1:
+        full_state = np.array(basis_csr_state.todense()).flatten()
+    else:
+        full_state = np.array(basis_csr_state.todense()).flatten()
 
-    # Extract data from basis_state
-    determinants = basis_state[0]
-    indices = basis_state[1]
-    coefficients = basis_state[2]
-
-    # Determine number of spin-orbitals from the determinants
-    n_spin_orbitals = len(determinants[0])
-    n_spatial_orbitals = n_spin_orbitals // 2
-
-    # Convert spatial orbital indices to spin-orbital indices
-    # For each spatial orbital i, we have spin-orbitals 2*i (spin-up) and 2*i+1 (spin-down)
-    spin_orb_W = sorted([2*i for i in S_w] + [2*i+1 for i in S_w])
-    spin_orb_V = sorted([2*i for i in S_v] + [2*i+1 for i in S_v])
-    spin_orb_N = sorted([2*i for i in S_n] + [2*i+1 for i in S_n])
-
-    # All spin-orbitals that are part of factorization
-    all_spin_orbs = spin_orb_W + spin_orb_V + spin_orb_N
-
-    # Construct the full sparse state vector in 2^n_spin_orbitals space
-    # Only populate the non-zero entries specified by indices and coefficients
-    full_state = np.zeros(2**n_spin_orbitals, dtype=complex)
-    for idx, coef in zip(indices, coefficients):
-        full_state[idx] = coef
-
-    # Determine how to factorize S_V based on the unique orbitals
-    unique_orbitals = set(i for i in [k, l, a, b] if i is not None)
+    # Determine number of spatial orbitals from state dimension
+    state_dim = len(full_state)
+    n_spatial_orbitals = int(np.log2(state_dim))
 
     factorization_dict = {}
 
     # Handle S_W block (if non-empty)
-    if len(spin_orb_W) > 0:
-        factorization_dict[tuple(spin_orb_W)] = extract_factor_from_state(
-            full_state, tuple(spin_orb_W), n_spin_orbitals
+    if len(S_w) > 0:
+        S_w_sorted = tuple(sorted(S_w))
+        factorization_dict[S_w_sorted] = extract_factor_from_state(
+            full_state, S_w_sorted, n_spatial_orbitals
         )
 
-    # Handle S_V block with different factorization strategies
-    if len(unique_orbitals) == 0:
+    # Handle S_V block with different factorization strategies based on number of spatial orbitals
+    n_spatial_V = len(S_v)
+
+    if n_spatial_V == 0:
         # S_V is empty - nothing to factorize
         pass
-    elif len(unique_orbitals) == 2:
-        # S_V cannot be factorized further - keep as one block
-        if len(spin_orb_V) > 0:
-            factorization_dict[tuple(spin_orb_V)] = extract_factor_from_state(
-                full_state, tuple(spin_orb_V), n_spin_orbitals
-            )
-    elif len(unique_orbitals) == 4:
-        # S_V can be factorized into individual spatial orbitals or pairs
-        # For now, keep as one block (can be refined based on specific requirements)
-        if len(spin_orb_V) > 0:
-            factorization_dict[tuple(spin_orb_V)] = extract_factor_from_state(
-                full_state, tuple(spin_orb_V), n_spin_orbitals
+    elif n_spatial_V == 2:
+        # S_V has 2 spatial orbitals - cannot be factorized further, keep as one block
+        S_v_sorted = tuple(sorted(S_v))
+        factorization_dict[S_v_sorted] = extract_factor_from_state(
+            full_state, S_v_sorted, n_spatial_orbitals
+        )
+    elif n_spatial_V == 4:
+        # S_V has 4 spatial orbitals - factorize into two blocks of 2 spatial orbitals each
+        # Sort S_v to ensure consistent ordering
+        S_v_sorted = sorted(S_v)
+
+        # Split into two pairs of spatial orbitals
+        S_v_1 = tuple(S_v_sorted[:2])  # First 2 spatial orbitals
+        S_v_2 = tuple(S_v_sorted[2:])  # Last 2 spatial orbitals
+
+        # Extract factorized states for each block
+        factorization_dict[S_v_1] = extract_factor_from_state(
+            full_state, S_v_1, n_spatial_orbitals
+        )
+        factorization_dict[S_v_2] = extract_factor_from_state(
+            full_state, S_v_2, n_spatial_orbitals
+        )
+    else:
+        # For other cases (1, 3, >4 spatial orbitals), keep as one block
+        if len(S_v) > 0:
+            S_v_sorted = tuple(sorted(S_v))
+            factorization_dict[S_v_sorted] = extract_factor_from_state(
+                full_state, S_v_sorted, n_spatial_orbitals
             )
 
     # Handle S_N block - factorize into individual spatial orbitals
     for spatial_idx in S_n:
-        # Each spatial orbital i contributes spin-orbitals (2*i, 2*i+1)
-        spin_pair = (2*spatial_idx, )
-        factorization_dict[spin_pair] = extract_factor_from_state(
-            full_state, spin_pair, n_spin_orbitals
-        )
-        factorization_dict[(2*spatial_idx + 1,)] = extract_factor_from_state(
-            full_state, (2*spatial_idx + 1,), n_spin_orbitals
+        # Each spatial orbital is treated separately
+        factorization_dict[(spatial_idx,)] = extract_factor_from_state(
+            full_state, (spatial_idx,), n_spatial_orbitals
         )
 
     return factorization_dict
+    
+
+
 
 
 def extract_factor_from_state(full_state, qubit_indices, n_total_qubits):
     """
     Extract a tensor factor from a full quantum state.
 
-    This function traces out all qubits except those in qubit_indices,
-    assuming the state factorizes (i.e., is a product state).
+    This function extracts the state vector for a subset of qubits,
+    assuming the full state factorizes (i.e., is a product state).
+
+    For a product state |ψ⟩ = |ψ_A⟩ ⊗ |ψ_B⟩, we can extract |ψ_A⟩ by
+    finding one computational basis state where |ψ_B⟩ is non-zero, then
+    extracting all amplitudes where |ψ_B⟩ is fixed to that state.
 
     Args:
-        full_state: Full state vector in 2^n_total_qubits dimensional space
+        full_state: Full state vector in 2^n_total_qubits dimensional space (numpy array)
         qubit_indices: tuple of qubit indices to extract
         n_total_qubits: total number of qubits
 

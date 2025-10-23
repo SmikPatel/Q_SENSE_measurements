@@ -2,81 +2,13 @@ import numpy as np
 from utils_m2_factorize import factorize_state, get_indices_mapping_2_wvn, expand_tensor_product
 import sys
 import pickle
-
-def test_factorize_example():
-    """Test the factorize_state function with a simple example."""
-
-    # Example basis state from your description:
-    # [determinants, indices, coefficients]
-    determinants = [
-        np.array([1., 1., 1., 1., 1., 0., 0., 1., 1., 1., 1., 0., 0., 1.]),
-        np.array([1., 1., 1., 1., 1., 0., 0., 1., 1., 1., 0., 1., 1., 0.]),
-        np.array([1., 1., 1., 1., 0., 1., 1., 0., 1., 1., 1., 0., 0., 1.]),
-        np.array([1., 1., 1., 1., 0., 1., 1., 0., 1., 1., 0., 1., 1., 0.])
-    ]
-    indices = [15993, 15990, 15801, 15798]
-    coefficients = np.array([0.5, -0.5, -0.5, 0.5])
-
-    basis_state = [determinants, indices, coefficients]
-
-    # Example S_w, S_v, S_n (spatial orbital indices)
-    # You'll need to set these based on your actual use case
-    S_w = []  # No W orbitals in this example
-    S_v = [2, 3]  # Example V orbitals (spatial indices)
-    S_n = [0, 1, 4, 5, 6]  # Example N orbitals (spatial indices)
-
-    print("Testing factorize_state function")
-    print("=" * 60)
-    print(f"Basis state indices: {indices}")
-    print(f"Coefficients: {coefficients}")
-    print(f"S_w (spatial): {S_w}")
-    print(f"S_v (spatial): {S_v}")
-    print(f"S_n (spatial): {S_n}")
-    print()
-
-    # Factorize the state
-    factorization_dict = factorize_state(basis_state, S_w, S_v, S_n)
-
-    print("Factorization result:")
-    print("-" * 60)
-    for key, value in factorization_dict.items():
-        print(f"Qubits {key}:")
-        print(f"  State vector (length {len(value)}): {value}")
-        print(f"  Norm: {np.linalg.norm(value):.6f}")
-        print()
-
-    # Verify that tensor product reconstructs the original state
-    print("Verification:")
-    print("-" * 60)
-    n_spin_orbitals = len(determinants[0])
-
-    # Reconstruct full state from factorization
-    reconstructed_state = expand_tensor_product(factorization_dict, n_spin_orbitals)
-
-    # Original sparse state
-    original_state = np.zeros(2**n_spin_orbitals)
-    for idx, coef in zip(indices, coefficients):
-        original_state[idx] = coef
-
-    # Normalize original state for comparison
-    original_state_normalized = original_state / np.linalg.norm(original_state)
-
-    # Check if they match
-    diff = np.linalg.norm(reconstructed_state - original_state_normalized)
-    print(f"Difference between original and reconstructed: {diff:.10f}")
-
-    if diff < 1e-10:
-        print("✓ Factorization successful!")
-    else:
-        print("✗ Factorization may have issues")
-        print(f"Original state non-zero entries:")
-        for idx in indices:
-            print(f"  [{idx}] = {original_state_normalized[idx]:.6f}")
-        print(f"Reconstructed state non-zero entries:")
-        nonzero_recon = np.nonzero(reconstructed_state)[0]
-        for idx in nonzero_recon:
-            print(f"  [{idx}] = {reconstructed_state[idx]:.6f}")
-
+from utils_ferm import (
+    orthogonal_transform_obt_tbt,
+    obt_phys_spatial_to_spin,
+    tbt_phys_spatial_to_spin,
+    make_short_H_ferm_op
+)
+from utils_states import compress_state, convert_dense_format_to_sparse_format, convert_TZ_format_to_sparse_format
 
 def test_with_real_data(bond_length):
     """Test with actual data from pickle file."""
@@ -96,12 +28,32 @@ def test_with_real_data(bond_length):
                 tbt_spatial
             ) = pickle.load(f)
 
+        if len(list_orb_rot) != 0:
+            obt, tbt = orthogonal_transform_obt_tbt(x_orbrot,list_orb_rot,obt_spatial,tbt_spatial)
+        else:
+            obt = obt_phys_spatial_to_spin(obt_spatial)
+            tbt = tbt_phys_spatial_to_spin(tbt_spatial)
+
         # Get the first basis state
         basis_state = list_list_refCSF[0][0]
         Norb = len(obt_spatial)
 
+        Nqubits = obt.shape[0]
+        Norb    = Nqubits // 2
+        dim     = 2 ** Nqubits
+
+        tz_states       = []
+  
+        for i, ucsf_list in enumerate(list_list_Uext_mp2_CSF):
+            for j, ucsf in enumerate(ucsf_list):
+                print(f"Basis state: {list_list_refCSF[i][j]}")
+                tz_states.append(ucsf)
+
         print(f"\nTesting with real data (bond length {bond_length})")
         print("=" * 60)
+
+        statevectors = [convert_TZ_format_to_sparse_format(dim, tz_state) for tz_state in tz_states]
+        tapered_state = convert_dense_format_to_sparse_format(compress_state(statevectors[0].toarray()[0]))
 
         # Get index mapping
         index_mapping = get_indices_mapping_2_wvn(basis_state, list_list_Uext_mp2_ampld[0], Norb)
@@ -117,7 +69,7 @@ def test_with_real_data(bond_length):
         print()
 
         # Factorize
-        factorization_dict = factorize_state(basis_state, S_w, S_v, S_n)
+        factorization_dict = factorize_state(tapered_state, S_w, S_v, S_n)
 
         print("Factorization result:")
         print("-" * 60)
@@ -130,8 +82,6 @@ def test_with_real_data(bond_length):
 
 
 if __name__ == "__main__":
-    # Test with simple example
-    test_factorize_example()
 
     # Test with real data if available
     if len(sys.argv) > 1:
