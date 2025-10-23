@@ -36,7 +36,7 @@ def expand_tensor_product_for_incomplete_qubit_set(factorization_dict):
 def partition_from_dict(factorization_dict):
     return list(factorization_dict.keys())
 
-def obtain_join_graph(partA, partB, N):
+def obtain_join_graph(partA, partB):
     all_vals = {val for block in partA + partB for val in block}
 
     G = nx.Graph()
@@ -51,8 +51,8 @@ def obtain_join_graph(partA, partB, N):
 
     return G
 
-def obtain_join_partition(partA, partB, N):
-    G   = obtain_join_graph(partA, partB, N)
+def obtain_join_partition(partA, partB):
+    G   = obtain_join_graph(partA, partB)
     ccs = nx.connected_components(G)
     
     return [tuple(sorted(cc)) for cc in ccs]
@@ -71,7 +71,7 @@ def obtain_coarse_dicts(factorization_dict1, factorization_dict2, N):
     partition1 = partition_from_dict(factorization_dict1)
     partition2 = partition_from_dict(factorization_dict2)
 
-    join_partition = obtain_join_partition(partition1, partition2, N)
+    join_partition = obtain_join_partition(partition1, partition2)
 
     coarse1 = obtain_coarse_partitioning(join_partition, factorization_dict1)
     coarse2 = obtain_coarse_partitioning(join_partition, factorization_dict2)
