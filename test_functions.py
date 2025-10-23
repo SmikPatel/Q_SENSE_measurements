@@ -1,0 +1,44 @@
+from utils_m2_factorize import get_indices_mapping_2_wvn
+import sys
+import pickle
+from utils_ferm import (
+    orthogonal_transform_obt_tbt,
+    obt_phys_spatial_to_spin,
+    tbt_phys_spatial_to_spin,
+    make_short_H_ferm_op
+)
+
+if __name__ == "__main__":
+  bond_length     = sys.argv[1]
+  filename        = f'h2o_data/Uext_CSF_for_Praveen_Smik_{bond_length}.dump'
+
+  with open(filename, 'rb') as f:
+      (
+      list_list_refCSF, # Vu |HF>
+      list_list_Uext_mp2_CSF, # Wu Vu HF
+      list_list_Uext_mp2_ampld, # Wu (i, a) pairs and the MP2 amplitudes
+      list_list_Uext_opt_ampld, # Wu (i, a) with optimal amplitudes
+      list_orb_rot,
+      x_orbrot,
+      Enuc,
+      obt_spatial,
+      tbt_spatial
+      ) = pickle.load(f)
+
+  if len(list_orb_rot) != 0:
+      obt, tbt = orthogonal_transform_obt_tbt(x_orbrot,list_orb_rot,obt_spatial,tbt_spatial)
+  else:
+      obt = obt_phys_spatial_to_spin(obt_spatial)
+      tbt = tbt_phys_spatial_to_spin(tbt_spatial)
+
+  Nqubits = obt.shape[0]
+  Norb    = Nqubits // 2
+  dim     = 2 ** Nqubits
+  
+  for i, ucsf_list in enumerate(list_list_Uext_mp2_CSF):
+     for j, ucsf in enumerate(ucsf_list):
+        print(f"Basis state: {list_list_refCSF[i][j]}")
+        index_mapping = get_indices_mapping_2_wvn(list_list_refCSF[i][j], list_list_Uext_mp2_ampld[i], Norb)
+        print(f'CSF index mapping for bond length {bond_length}, CSF {i},{j}: {index_mapping}')
+        # print(f"W amplitude: {list_list_Uext_mp2_ampld[i]})")
+        # print(f"Vu CSF: {list_list_refCSF[i][j]})")

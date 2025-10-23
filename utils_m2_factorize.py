@@ -6,6 +6,189 @@ from openfermion import (
     get_sparse_operator
 )
 import networkx as nx
+from csf_categorizer import categorize_csf_state
+
+
+def factorize_state(basis_state, S_w, S_v, S_n):
+    """
+    Factorize a quantum state into tensor product components based on orbital sets.
+
+    Input:
+        basis_state: [determinants, indices, coefficients] where
+            - determinants: list of occupation number arrays
+            - indices: list of integer indices in 2^n_orb space
+            - coefficients: array of coefficients for each determinant
+        S_w: list of spatial orbital indices for W block (quantum treatment needed)
+        S_v: list of spatial orbital indices for V block (affected by rotations)
+        S_n: list of spatial orbital indices for N block (invariant)
+
+    Return:
+        dict mapping orbital tuples to state vectors:
+        {(qubits_w...): psi_w, (qubits_v...): psi_v, (i,): psi_i, (j,): psi_j, ...}
+
+    The keys are tuples of spin-orbital indices, values are normalized state vectors.
+    """
+    (_, k, l, a, b) = categorize_csf_state(basis_state)
+
+    # Extract data from basis_state
+    determinants = basis_state[0]
+    indices = basis_state[1]
+    coefficients = basis_state[2]
+
+    # Determine number of spin-orbitals from the determinants
+    n_spin_orbitals = len(determinants[0])
+    n_spatial_orbitals = n_spin_orbitals // 2
+
+    # Convert spatial orbital indices to spin-orbital indices
+    # For each spatial orbital i, we have spin-orbitals 2*i (spin-up) and 2*i+1 (spin-down)
+    spin_orb_W = sorted([2*i for i in S_w] + [2*i+1 for i in S_w])
+    spin_orb_V = sorted([2*i for i in S_v] + [2*i+1 for i in S_v])
+    spin_orb_N = sorted([2*i for i in S_n] + [2*i+1 for i in S_n])
+
+    # All spin-orbitals that are part of factorization
+    all_spin_orbs = spin_orb_W + spin_orb_V + spin_orb_N
+
+    # Construct the full sparse state vector in 2^n_spin_orbitals space
+    # Only populate the non-zero entries specified by indices and coefficients
+    full_state = np.zeros(2**n_spin_orbitals, dtype=complex)
+    for idx, coef in zip(indices, coefficients):
+        full_state[idx] = coef
+
+    # Determine how to factorize S_V based on the unique orbitals
+    unique_orbitals = set(i for i in [k, l, a, b] if i is not None)
+
+    factorization_dict = {}
+
+    # Handle S_W block (if non-empty)
+    if len(spin_orb_W) > 0:
+        factorization_dict[tuple(spin_orb_W)] = extract_factor_from_state(
+            full_state, tuple(spin_orb_W), n_spin_orbitals
+        )
+
+    # Handle S_V block with different factorization strategies
+    if len(unique_orbitals) == 0:
+        # S_V is empty - nothing to factorize
+        pass
+    elif len(unique_orbitals) == 2:
+        # S_V cannot be factorized further - keep as one block
+        if len(spin_orb_V) > 0:
+            factorization_dict[tuple(spin_orb_V)] = extract_factor_from_state(
+                full_state, tuple(spin_orb_V), n_spin_orbitals
+            )
+    elif len(unique_orbitals) == 4:
+        # S_V can be factorized into individual spatial orbitals or pairs
+        # For now, keep as one block (can be refined based on specific requirements)
+        if len(spin_orb_V) > 0:
+            factorization_dict[tuple(spin_orb_V)] = extract_factor_from_state(
+                full_state, tuple(spin_orb_V), n_spin_orbitals
+            )
+
+    # Handle S_N block - factorize into individual spatial orbitals
+    for spatial_idx in S_n:
+        # Each spatial orbital i contributes spin-orbitals (2*i, 2*i+1)
+        spin_pair = (2*spatial_idx, )
+        factorization_dict[spin_pair] = extract_factor_from_state(
+            full_state, spin_pair, n_spin_orbitals
+        )
+        factorization_dict[(2*spatial_idx + 1,)] = extract_factor_from_state(
+            full_state, (2*spatial_idx + 1,), n_spin_orbitals
+        )
+
+    return factorization_dict
+
+
+def extract_factor_from_state(full_state, qubit_indices, n_total_qubits):
+    """
+    Extract a tensor factor from a full quantum state.
+
+    This function traces out all qubits except those in qubit_indices,
+    assuming the state factorizes (i.e., is a product state).
+
+    Args:
+        full_state: Full state vector in 2^n_total_qubits dimensional space
+        qubit_indices: tuple of qubit indices to extract
+        n_total_qubits: total number of qubits
+
+    Returns:
+        Normalized state vector for the specified qubits (dimension 2^len(qubit_indices))
+    """
+    n_factor_qubits = len(qubit_indices)
+    factor_state = np.zeros(2**n_factor_qubits, dtype=complex)
+
+    # Find one non-zero entry in the full state to use as reference
+    nonzero_idx = np.nonzero(full_state)[0]
+    if len(nonzero_idx) == 0:
+        # State is zero - return zero vector
+        return factor_state
+
+    # Use first non-zero entry as reference
+    ref_global_idx = nonzero_idx[0]
+
+    # Convert global index to binary representation
+    ref_bits = [(ref_global_idx >> i) & 1 for i in range(n_total_qubits)]
+
+    # Extract values for qubits NOT in qubit_indices (complementary qubits)
+    comp_qubits = [i for i in range(n_total_qubits) if i not in qubit_indices]
+    comp_bits = [ref_bits[i] for i in comp_qubits]
+
+    # Iterate through all possible configurations of the factor qubits
+    for factor_idx in range(2**n_factor_qubits):
+        # Convert factor index to bits
+        factor_bits = [(factor_idx >> i) & 1 for i in range(n_factor_qubits)]
+
+        # Construct full index by combining factor bits and complementary bits
+        full_bits = [0] * n_total_qubits
+        for i, q in enumerate(qubit_indices):
+            full_bits[q] = factor_bits[i]
+        for i, q in enumerate(comp_qubits):
+            full_bits[q] = comp_bits[i]
+
+        # Convert bits to index
+        global_idx = sum(bit << i for i, bit in enumerate(full_bits))
+
+        # Extract amplitude
+        factor_state[factor_idx] = full_state[global_idx]
+
+    # Normalize
+    norm = np.linalg.norm(factor_state)
+    if norm > 1e-12:
+        factor_state /= norm
+
+    return factor_state
+
+
+def get_indices_mapping_2_wvn(basis_state, mp2_amplitude, Norb):
+    """
+    Args:
+        basis_state: list of occupied spin-orbital indices in the CSF basis state (list_list_refCSF[i][j])
+        mp2_amplitude: list of MP2 amplitude data [[[i, a]], amplitude_value (list_list_Uext_mp2_ampld[i])
+        Norb: number of spatial orbitals
+    Return: {index: 'W' or 'V' or 'N'}
+
+    """
+    S_W, S_V, S_N = [], [], []
+    
+    if not mp2_amplitude == []:
+        print(f'MP2 amplitude data provided: {mp2_amplitude}')
+        
+        # Extract the spatial indices that have to be quantumly treated
+        for amplitude_data in mp2_amplitude:
+            # amplitude_data format: [[[0, 5]], amplitude_value]
+            # Extract the indices from the first element
+            indices = amplitude_data[0][0]  # Gets [0, 5] from [[[0, 5]], amplitude_value]
+            print(f'Indices from MP2 amplitude data: {indices}')
+            S_W.extend(indices)  # Add both indices to S_W
+        S_W = list(set(S_W))
+    
+    # Extract indices that are affected by Vu rotations
+    (_, k, l, a, b) = categorize_csf_state(basis_state)
+    print(f'Categorized CSF state indices: k={k}, l={l}, a={a}, b={b}')
+    # Convert spin-orbitals to spatial orbitals (integer division by 2), skip None values
+    spatial_orbitals = [idx for idx in [k, l, a, b] if idx is not None]
+    S_V = list(set([idx for idx in spatial_orbitals]))
+    # Get the invariant indices under Vu and Wu rotations
+    S_N = [k for k in range(Norb) if k not in S_W and k not in S_V]
+    return {index: 'W' for index in S_W} | {index: 'V' for index in S_V} | {index: 'N' for index in S_N}
 
 #
 #    Functions to convert factorized format ("factorization_dict") to length 2^N vector format for quantum states
@@ -157,5 +340,4 @@ def evaluate_fully_classical_factors(factorization_dict_bra, factorization_dict_
     Qstate_ket = expand_tensor_product_for_incomplete_qubit_set(coarse_dict_ket)
 
     return Heff, Qstate_bra, Qstate_ket
-
 
