@@ -67,7 +67,7 @@ def obtain_coarse_partitioning(join_partition, factorization_dict):
 
     return coarse_dict
 
-def obtain_coarse_dicts(factorization_dict1, factorization_dict2, N):
+def obtain_coarse_dicts(factorization_dict1, factorization_dict2):
     partition1 = partition_from_dict(factorization_dict1)
     partition2 = partition_from_dict(factorization_dict2)
 
@@ -117,10 +117,10 @@ def relabel_qubits_in_pauli_term(TC, C):
         new_terms_tuple.append(new_term)
     return tuple(new_terms_tuple)
 
-def evaluate_matrix_element_given_term(psi, phi, TC):
+def evaluate_matrix_element_given_term(psi, phi, TCrelabelled):
     Nqubits      = int(log(len(psi), 2))
-    Pauli_sparse = get_sparse_operator(QubitOperator(TC), Nqubits)
-    return (psi @ Pauli_sparse @ phi.T)[0,0]
+    Pauli_sparse = get_sparse_operator(QubitOperator(TCrelabelled), Nqubits)
+    return psi @ Pauli_sparse @ phi.T
 
 def partially_evaluate_pauli_term(psi, phi, T, C):
     TC, TR       = split_pauli_operator(T, C)
@@ -133,9 +133,9 @@ def partially_evaluate_hamiltonian_matrix_element(psi, phi, H, C):
         H_evaluated += coef * partially_evaluate_pauli_term(psi, phi, term, C)
     return H_evaluated
 
-def evaluate_fully_classical_factors(factorization_dict_bra, factorization_dict_ket, bra_labels, ket_labels, H, Nqubits):
+def evaluate_fully_classical_factors(factorization_dict_bra, factorization_dict_ket, bra_labels, ket_labels, H):
 
-    join_partition, coarse_dict_bra, coarse_dict_ket = obtain_coarse_dicts(factorization_dict_bra, factorization_dict_ket, Nqubits)
+    join_partition, coarse_dict_bra, coarse_dict_ket = obtain_coarse_dicts(factorization_dict_bra, factorization_dict_ket)
     QC_assignment_dict                               = QC_assignment_from_qubit_labels(bra_labels, ket_labels, join_partition)
 
     full_Q_block = set()
