@@ -41,8 +41,9 @@ if __name__ == "__main__":
      for j, ucsf in enumerate(ucsf_list):
         print(f"Basis state: {list_list_refCSF[i][j]}")
         tz_states.append(ucsf)
-        index_mapping = get_indices_mapping_2_wvn(list_list_refCSF[i][j], list_list_Uext_mp2_ampld[i], Norb)
-        print(f'CSF index mapping for bond length {bond_length}, CSF {i},{j}: {index_mapping}')
+        index_mapping, state_type = get_indices_mapping_2_wvn(list_list_refCSF[i][j], list_list_Uext_mp2_ampld[i], Norb)
+        print(f'CSF index mapping for bond length {bond_length}, CSF {len(tz_states)}: {index_mapping}')
+        print(f'State type: {state_type}')
         # print(f"W amplitude: {list_list_Uext_mp2_ampld[i]})")
         # print(f"Vu CSF: {list_list_refCSF[i][j]})")
 

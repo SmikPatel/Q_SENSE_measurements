@@ -9,7 +9,7 @@ import networkx as nx
 from csf_categorizer import categorize_csf_state
 
 
-def factorize_state(basis_csr_state, S_w, S_v, S_n):
+def factorize_state(basis_csr_state, S_w, S_v, S_n, state_type):
     """
     Factorize a quantum state into tensor product components based on orbital sets.
 
@@ -29,7 +29,7 @@ def factorize_state(basis_csr_state, S_w, S_v, S_n):
     Factorization strategy:
     - S_W: All W orbitals kept as one block
     - S_V with 2 spatial orbitals: kept as one block (S_v_1)
-    - S_V with 4 spatial orbitals: split into two blocks of 2 spatial orbitals each (S_v_1, S_v_2)
+    - S_V with 4 spatial orbitals: split into two blocks of 2 spatial orbitals each (S_v_1, S_v_2) if it's State type 3. 
     - S_N: Each spatial orbital factorized separately as (i,)
     """
     # Convert sparse matrix to dense array
@@ -47,7 +47,7 @@ def factorize_state(basis_csr_state, S_w, S_v, S_n):
     # Handle S_W block (if non-empty)
     if len(S_w) > 0:
         S_w_sorted = tuple(sorted(S_w))
-        factorization_dict[S_w_sorted] = extract_factor_from_state(
+        factorization_dict[S_w_sorted], _ = partial_trace_einsum(
             full_state, S_w_sorted, n_spatial_orbitals
         )
 
@@ -60,108 +60,128 @@ def factorize_state(basis_csr_state, S_w, S_v, S_n):
     elif n_spatial_V == 2:
         # S_V has 2 spatial orbitals - cannot be factorized further, keep as one block
         S_v_sorted = tuple(sorted(S_v))
-        factorization_dict[S_v_sorted] = extract_factor_from_state(
+        factorization_dict[S_v_sorted], _ = partial_trace_einsum(
             full_state, S_v_sorted, n_spatial_orbitals
         )
     elif n_spatial_V == 4:
-        # S_V has 4 spatial orbitals - factorize into two blocks of 2 spatial orbitals each
-        # Sort S_v to ensure consistent ordering
-        S_v_sorted = sorted(S_v)
+        if state_type == 3:
+            # S_V has 4 spatial orbitals - factorize into two blocks of 2 spatial orbitals each
+            # Sort S_v to ensure consistent ordering
+            S_v_sorted = sorted(S_v)
 
-        # Split into two pairs of spatial orbitals
-        S_v_1 = tuple(S_v_sorted[:2])  # First 2 spatial orbitals
-        S_v_2 = tuple(S_v_sorted[2:])  # Last 2 spatial orbitals
+            # Split into two pairs of spatial orbitals
+            S_v_1 = tuple([S_v_sorted[0], S_v_sorted[1]])
+            S_v_2 = tuple([S_v_sorted[2], S_v_sorted[3]])
 
-        # Extract factorized states for each block
-        factorization_dict[S_v_1] = extract_factor_from_state(
-            full_state, S_v_1, n_spatial_orbitals
-        )
-        factorization_dict[S_v_2] = extract_factor_from_state(
-            full_state, S_v_2, n_spatial_orbitals
-        )
+            # Extract factorized states for each block
+            factorization_dict[S_v_1], is_pure = partial_trace_einsum(
+                full_state, S_v_1, n_spatial_orbitals
+            )
+            factorization_dict[S_v_2], _ = partial_trace_einsum(
+                full_state, S_v_2, n_spatial_orbitals
+            )
+            if not is_pure:
+                factorization_dict.pop(S_v_1)
+                factorization_dict.pop(S_v_2)
+                S_v_1 = tuple([S_v_sorted[0], S_v_sorted[2]])
+                S_v_2 = tuple([S_v_sorted[1], S_v_sorted[3]])
+
+                # Extract factorized states for each block
+                factorization_dict[S_v_1], is_pure2 = partial_trace_einsum(
+                    full_state, S_v_1, n_spatial_orbitals
+                )
+                factorization_dict[S_v_2], _ = partial_trace_einsum(
+                    full_state, S_v_2, n_spatial_orbitals
+                )
+                if not is_pure2:
+                    factorization_dict.pop(S_v_1)
+                    factorization_dict.pop(S_v_2)
+                    S_v_1 = tuple([S_v_sorted[0], S_v_sorted[3]])
+                    S_v_2 = tuple([S_v_sorted[2], S_v_sorted[3]])
+
+                    # Extract factorized states for each block
+                    factorization_dict[S_v_1], _ = partial_trace_einsum(
+                        full_state, S_v_1, n_spatial_orbitals
+                    )
+                    factorization_dict[S_v_2], _ = partial_trace_einsum(
+                        full_state, S_v_2, n_spatial_orbitals
+                    )
+        elif state_type == 4:
+            # State type 4 has i,j,a,b entangled so cannot be factorized further
+            S_v_sorted = tuple(sorted(S_v))
+            factorization_dict[S_v_sorted], _ = partial_trace_einsum(
+                full_state, S_v_sorted, n_spatial_orbitals
+            )
     else:
-        # For other cases (1, 3, >4 spatial orbitals), keep as one block
+        # For other cases (1, 3, >4 spatial orbitals), keep as one block, though this is not expected
         if len(S_v) > 0:
             S_v_sorted = tuple(sorted(S_v))
-            factorization_dict[S_v_sorted] = extract_factor_from_state(
+            factorization_dict[S_v_sorted], _ = partial_trace_einsum(
                 full_state, S_v_sorted, n_spatial_orbitals
             )
 
     # Handle S_N block - factorize into individual spatial orbitals
     for spatial_idx in S_n:
         # Each spatial orbital is treated separately
-        factorization_dict[(spatial_idx,)] = extract_factor_from_state(
+        factorization_dict[(spatial_idx,)], _ = partial_trace_einsum(
             full_state, (spatial_idx,), n_spatial_orbitals
         )
 
     return factorization_dict
     
 
-
-
-
-def extract_factor_from_state(full_state, qubit_indices, n_total_qubits):
+def partial_trace_einsum(psi, qubit_indices, n_total_qubits):
     """
-    Extract a tensor factor from a full quantum state.
-
-    This function extracts the state vector for a subset of qubits,
-    assuming the full state factorizes (i.e., is a product state).
-
-    For a product state |ψ⟩ = |ψ_A⟩ ⊗ |ψ_B⟩, we can extract |ψ_A⟩ by
-    finding one computational basis state where |ψ_B⟩ is non-zero, then
-    extracting all amplitudes where |ψ_B⟩ is fixed to that state.
-
-    Args:
-        full_state: Full state vector in 2^n_total_qubits dimensional space (numpy array)
-        qubit_indices: tuple of qubit indices to extract
-        n_total_qubits: total number of qubits
-
-    Returns:
-        Normalized state vector for the specified qubits (dimension 2^len(qubit_indices))
+    Compute reduced density matrix by tracing out some qubits using np.einsum.
+    psi: full state vector (2**n_qubits,)
+    qubit_indices: list of qubit indices to keep
+    n_total_qubits: total number of qubits in psi
     """
-    n_factor_qubits = len(qubit_indices)
-    factor_state = np.zeros(2**n_factor_qubits, dtype=complex)
+    psi = psi / np.linalg.norm(psi)
+    trace_out = [i for i in range(n_total_qubits) if i not in qubit_indices]
 
-    # Find one non-zero entry in the full state to use as reference
-    nonzero_idx = np.nonzero(full_state)[0]
-    if len(nonzero_idx) == 0:
-        # State is zero - return zero vector
-        return factor_state
+    # Labels for einsum - use single characters only
+    # Available characters for einsum indices
+    available_chars = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ'
 
-    # Use first non-zero entry as reference
-    ref_global_idx = nonzero_idx[0]
+    if n_total_qubits > len(available_chars) // 2:
+        raise ValueError(f"Too many qubits ({n_total_qubits}) for einsum method. Maximum supported: {len(available_chars) // 2}")
 
-    # Convert global index to binary representation
-    ref_bits = [(ref_global_idx >> i) & 1 for i in range(n_total_qubits)]
+    # Assign single character labels
+    ket_labels = list(available_chars[:n_total_qubits])
+    bra_labels = list(available_chars[n_total_qubits:2*n_total_qubits])
 
-    # Extract values for qubits NOT in qubit_indices (complementary qubits)
-    comp_qubits = [i for i in range(n_total_qubits) if i not in qubit_indices]
-    comp_bits = [ref_bits[i] for i in comp_qubits]
+    # For traced-out qubits, we identify a_i = b_i (trace)
+    for i in trace_out:
+        bra_labels[i] = ket_labels[i]
 
-    # Iterate through all possible configurations of the factor qubits
-    for factor_idx in range(2**n_factor_qubits):
-        # Convert factor index to bits
-        factor_bits = [(factor_idx >> i) & 1 for i in range(n_factor_qubits)]
+    # Build the einsum string
+    einsum_str = f"{''.join(ket_labels)}," \
+                 f"{''.join(bra_labels)}->" \
+                 f"{''.join(ket_labels[i] for i in qubit_indices)}" \
+                 f"{''.join(bra_labels[i] for i in qubit_indices)}"
 
-        # Construct full index by combining factor bits and complementary bits
-        full_bits = [0] * n_total_qubits
-        for i, q in enumerate(qubit_indices):
-            full_bits[q] = factor_bits[i]
-        for i, q in enumerate(comp_qubits):
-            full_bits[q] = comp_bits[i]
+    # Perform contraction
+    psi_tensor = psi.reshape([2] * n_total_qubits)
+    rho = np.einsum(einsum_str, psi_tensor, np.conjugate(psi_tensor))
 
-        # Convert bits to index
-        global_idx = sum(bit << i for i, bit in enumerate(full_bits))
+    # Reshape to matrix form
+    dim = 2 ** len(qubit_indices)
+    rho = rho.reshape((dim, dim))
 
-        # Extract amplitude
-        factor_state[factor_idx] = full_state[global_idx]
+    eigvals, eigvecs = np.linalg.eigh(rho)
+    # Find index of the largest eigenvalue
+    idx = np.argmax(np.real(eigvals))
+    phi = eigvecs[:, idx]
 
-    # Normalize
-    norm = np.linalg.norm(factor_state)
-    if norm > 1e-12:
-        factor_state /= norm
+    purity = np.trace(rho @ rho)
+    is_pure = np.abs(purity - 1.0) < 1e-10
 
-    return factor_state
+    # Normalize (just to be safe)
+    phi /= np.linalg.norm(phi)
+
+    return phi, is_pure
+
 
 
 def get_indices_mapping_2_wvn(basis_state, mp2_amplitude, Norb):
@@ -188,14 +208,14 @@ def get_indices_mapping_2_wvn(basis_state, mp2_amplitude, Norb):
         S_W = list(set(S_W))
     
     # Extract indices that are affected by Vu rotations
-    (_, k, l, a, b) = categorize_csf_state(basis_state)
+    (state_type, k, l, a, b) = categorize_csf_state(basis_state)
     print(f'Categorized CSF state indices: k={k}, l={l}, a={a}, b={b}')
     # Convert spin-orbitals to spatial orbitals (integer division by 2), skip None values
     spatial_orbitals = [idx for idx in [k, l, a, b] if idx is not None]
     S_V = list(set([idx for idx in spatial_orbitals]))
     # Get the invariant indices under Vu and Wu rotations
     S_N = [k for k in range(Norb) if k not in S_W and k not in S_V]
-    return {index: 'W' for index in S_W} | {index: 'V' for index in S_V} | {index: 'N' for index in S_N}
+    return {index: 'W' for index in S_W} | {index: 'V' for index in S_V} | {index: 'N' for index in S_N}, state_type
 
 #
 #    Functions to convert factorized format ("factorization_dict") to length 2^N vector format for quantum states
