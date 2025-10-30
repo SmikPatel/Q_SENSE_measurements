@@ -220,10 +220,13 @@ def get_indices_mapping_2_wvn(basis_state, mp2_amplitude, Norb):
 
 def get_indices_mapping_2_wvn_vo(basis_state, mp2_amplitude, Norb):
     """
+    Length of list_CSF, list_list_ia_CSF, tz_states are all the same.
+
     Args: 
         basis_state: list of occupied spin-orbital indices in the CSF basis state (list_CSF[k])
         mp2_amplitude: list of MP2 amplitude data [[[i, a]], amplitude_value (list_list_ia_CSF[k]: The ia list for k-th CSF)
         Norb: number of spatial orbitals
+    Return: {index: 'W' or 'V' or 'N'}
     """
     S_W, S_V, S_N = [], [], []
     if not mp2_amplitude == []:
