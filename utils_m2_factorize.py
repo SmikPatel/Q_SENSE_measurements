@@ -217,6 +217,38 @@ def get_indices_mapping_2_wvn(basis_state, mp2_amplitude, Norb):
     S_N = [k for k in range(Norb) if k not in S_W and k not in S_V]
     return {index: 'W' for index in S_W} | {index: 'V' for index in S_V} | {index: 'N' for index in S_N}, state_type
 
+
+def get_indices_mapping_2_wvn_vo(basis_state, mp2_amplitude, Norb):
+    """
+    Length of list_CSF, list_list_ia_CSF, tz_states are all the same.
+
+    Args: 
+        basis_state: list of occupied spin-orbital indices in the CSF basis state (list_CSF[k])
+        mp2_amplitude: list of MP2 amplitude data [[[i, a]], amplitude_value (list_list_ia_CSF[k]: The ia list for k-th CSF)
+        Norb: number of spatial orbitals
+    Return: {index: 'W' or 'V' or 'N'}
+    """
+    S_W, S_V, S_N = [], [], []
+    if not mp2_amplitude == []:
+        print(f'MP2 amplitude data provided: {mp2_amplitude}')
+        
+        # Extract the spatial indices that have to be quantumly treated
+        for amplitude_data in mp2_amplitude:
+            # amplitude_data format: [[[0, 5]], amplitude_value]
+            # Extract the indices from the first element
+            indices = amplitude_data[0]  # Gets [0, 5] from [[[0, 5]], amplitude_value]
+            print(f'Indices from MP2 amplitude data: {indices}')
+            S_W.extend(indices)  # Add both indices to S_W
+        S_W = list(set(S_W))
+    (state_type, k, l, a, b) = categorize_csf_state(basis_state)
+    print(f'Categorized CSF state indices: k={k}, l={l}, a={a}, b={b}')
+    # Convert spin-orbitals to spatial orbitals (integer division by 2), skip None values
+    spatial_orbitals = [idx for idx in [k, l, a, b] if idx is not None]
+    S_V = list(set([idx for idx in spatial_orbitals]))
+    # Get the invariant indices under Vu and Wu rotations
+    S_N = [k for k in range(Norb) if k not in S_W and k not in S_V]
+    return {index: 'W' for index in S_W} | {index: 'V' for index in S_V} | {index: 'N' for index in S_N}, state_type
+
 #
 #    Functions to convert factorized format ("factorization_dict") to length 2^N vector format for quantum states
 #
